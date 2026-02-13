@@ -2,8 +2,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model : str
-    nlp_search_instruction_prompt: str
-    nlp_search_example_prompt: str
+    PROMPT_VERSION: str = "latest"
+
+
     project: str
     location: str
     max_output_tokens: int

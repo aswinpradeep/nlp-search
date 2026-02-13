@@ -4,7 +4,7 @@ from src import config
 import logging
 import vertexai
 from vertexai.generative_models import GenerativeModel
-import os, json
+import os, json, yaml
 from functools import lru_cache
 
 logging.basicConfig()
@@ -15,7 +15,14 @@ logger = logging.getLogger(__name__)
 def get_settings():
     return config.Settings()
 
+@lru_cache
+def get_prompts():
+    with open("src/prompts.yaml", "r") as f:
+        return yaml.safe_load(f)
+
+
 settings = get_settings()
+prompts = get_prompts()
 if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"]=settings.GOOGLE_APPLICATION_CREDENTIALS
 
@@ -33,6 +40,27 @@ generation_config = {
     "temperature": settings.temperature,
     "top_p": settings.top_p,
     "top_k": settings.top_k,
+    "response_mime_type": "application/json",
+    "response_schema": {
+        "type": "OBJECT",
+        "properties": {
+            "keywords": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "keyword": {"type": "STRING"},
+                        "priority": {"type": "INTEGER"},
+                         "synonyms": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"}
+                        }
+                    },
+                    "required": ["keyword", "priority"]
+                }
+            }
+        }
+    }
 }
 
 
@@ -58,11 +86,23 @@ def search_request(req_data):
     
 
 def llm_request(query, synonym):
+    version = settings.PROMPT_VERSION
+    if version not in prompts:
+        if "latest" in prompts:
+             version = prompts["latest"]
+        else:
+             raise ValueError(f"Prompt version {version} not found in prompts.yaml")
     
-    prompt = settings.nlp_search_instruction_prompt + query + settings.nlp_search_example_prompt
+    # Handle alias if the version points to a string (another version)
+    if isinstance(prompts.get(version), str):
+        version = prompts[version]
+
+    selected_prompt = prompts[version]
+    prompt = f"{selected_prompt['instruction']} {query} {selected_prompt['example']}"
+    
     logger.info(synonym)
     if synonym:
-        prompt = prompt.replace(']' , '] \n Add synonym for keywords wherever possible.')
+        prompt += "\n Instruction: Add synonym for keywords wherever possible."
     logger.info(prompt)
     responses = model.generate_content(
         prompt,
@@ -74,8 +114,9 @@ def llm_request(query, synonym):
     for response in responses:
         res_text_designation += response.text
     logger.info(res_text_designation)
+
     try:
-        return json.loads(res_text_designation.replace('```','').replace('json', ''))
+        return json.loads(res_text_designation)
     except Exception as e:
         logger.error(res_text_designation)
         traceback.print_exc()
